@@ -1,0 +1,320 @@
+{
+  "name": "Line Image Classification Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "line-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-line",
+      "name": "Line Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "line-message-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.events[0].type }}",
+              "rightValue": "message",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.events[0].message.type }}",
+              "rightValue": "image",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "filter-image-messages",
+      "name": "Filter Image Messages",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "get",
+        "messageId": "={{ $json.events[0].message.id }}"
+      },
+      "id": "get-line-image",
+      "name": "Get Line Image",
+      "type": "n8n-nodes-base.line",
+      "typeVersion": 1,
+      "position": [680, 200],
+      "credentials": {
+        "lineOAuth2Api": {
+          "id": "line-oauth-credentials",
+          "name": "Line OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://your-classification-api.com/predict",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "multipart/form-data"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "image",
+              "value": "={{ $binary.data }}"
+            },
+            {
+              "name": "user_id",
+              "value": "={{ $('Line Webhook').item.json.events[0].source.userId }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "classify-image",
+      "name": "Classify Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "classification-api-auth",
+          "name": "Classification API Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "chatId": "={{ $('Line Webhook').item.json.events[0].source.userId }}",
+        "messageType": "text",
+        "text": "🔍 Image Classification Result:\n\n📊 Prediction: {{ $json.prediction }}\n🎯 Confidence: {{ ($json.confidence * 100).toFixed(2) }}%\n\n{{ $json.description ? '📝 ' + $json.description : '' }}"
+      },
+      "id": "send-prediction",
+      "name": "Send Prediction to User",
+      "type": "n8n-nodes-base.line",
+      "typeVersion": 1,
+      "position": [1120, 200],
+      "credentials": {
+        "lineOAuth2Api": {
+          "id": "line-oauth-credentials",
+          "name": "Line OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "your-google-sheet-id",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "user_id": "={{ $('Line Webhook').item.json.events[0].source.userId }}",
+            "message_id": "={{ $('Line Webhook').item.json.events[0].message.id }}",
+            "prediction": "={{ $('Classify Image').item.json.prediction }}",
+            "confidence": "={{ $('Classify Image').item.json.confidence }}",
+            "description": "={{ $('Classify Image').item.json.description || '' }}",
+            "image_url": "={{ $('Get Line Image').item.json.originalContentUrl || '' }}",
+            "processing_time_ms": "={{ Date.now() - new Date($('Line Webhook').item.json.timestamp).getTime() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-to-sheets",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1340, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-oauth",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 200]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "chatId": "={{ $('Line Webhook').item.json.events[0].source.userId }}",
+        "messageType": "text",
+        "text": "❌ Sorry, I can only process image messages. Please send an image for classification."
+      },
+      "id": "send-error-message",
+      "name": "Send Error Message",
+      "type": "n8n-nodes-base.line",
+      "typeVersion": 1,
+      "position": [680, 400],
+      "credentials": {
+        "lineOAuth2Api": {
+          "id": "line-oauth-credentials",
+          "name": "Line OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK"
+      },
+      "id": "error-webhook-response",
+      "name": "Error Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 400]
+    }
+  ],
+  "connections": {
+    "Line Webhook": {
+      "main": [
+        [
+          {
+            "node": "Filter Image Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Image Messages": {
+      "main": [
+        [
+          {
+            "node": "Get Line Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Error Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Line Image": {
+      "main": [
+        [
+          {
+            "node": "Classify Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Image": {
+      "main": [
+        [
+          {
+            "node": "Send Prediction to User",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Prediction to User": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error Message": {
+      "main": [
+        [
+          {
+            "node": "Error Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
